@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../fio.h"
+#include "../../fio.h"
 #include "tools/nvme.h"
 
 

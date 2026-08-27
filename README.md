@@ -1,33 +1,95 @@
 # newperf fio ioengine
 
-`newperf` is an external fio ioengine for direct NVMe performance measurement.
-It bypasses the Linux block layer and talks to an NVMe controller through BAR0,
-admin queues, I/O submission queues, I/O completion queues, and DMA memory.
+`newperf` は、NVMe の性能を直接測定するための外部 fio ioengine です。
+Linux のブロックレイヤーを迂回し、BAR0、管理キュー、I/O サブミッションキュー、
+I/O コンプリーションキュー、DMA メモリを通じて NVMe コントローラーと通信します。
 
-This engine is intended for learning and controlled performance experiments.
-It is not a general-purpose storage driver.
+このエンジンは、学習用途および管理された性能実験を目的としています。
+汎用のストレージドライバーではありません。
 
-## Warning
+## 警告
 
-This program directly controls the NVMe controller.
+このプログラムは NVMe コントローラーを直接制御します。
 
-- Use a test device only.
-- Do not use a device that contains important data.
-- `write` and `trim` workloads can destroy data.
-- Do not run this while another driver is actively using the same controller.
-- Multiple fio files are not supported.
-- All jobs must target the same controller/namespace. The engine assumes this by operation rule.
+- テスト用デバイスのみを使用してください。
+- 重要なデータが入っているデバイスでは使用しないでください。
+- `write` および `trim` ワークロードはデータを破壊する可能性があります。
+- 同じコントローラーを別のドライバーが使用中の状態では実行しないでください。
+- 複数の fio ファイルはサポートしていません。
+- すべてのジョブは同じコントローラー/名前空間を対象にする必要があります。このエンジンは運用ルールとしてそれを前提にしています。
 
-## Build
+## 実行前の準備
 
-Build from the `engines` directory.
+### 対象デバイスの確認
+
+例として、PCI アドレスが `0000:05:00.0` の NVMe コントローラーを使う場合は、
+まず対象デバイスが正しいことを確認してください。
 
 ```bash
-cd /home/ttt/fio/engines
+lspci -nn -s 05:00.0
+```
+
+### Linux nvme ドライバーからの unbind
+
+対象の NVMe コントローラーが Linux の `nvme` ドライバーに bind されている場合は、
+`newperf` を実行する前に、そのコントローラーを unbind してください。
+
+`driver` symlink が `nvme` を指している場合は、OS の NVMe ドライバーに bind されています。
+
+```bash
+readlink /sys/bus/pci/devices/0000:05:00.0/driver
+```
+
+unbind するには次を実行します。
+
+```bash
+echo 0000:05:00.0 | sudo tee /sys/bus/pci/drivers/nvme/unbind
+```
+
+この操作を行うと、対象デバイスは通常の NVMe デバイスとして OS から使用できなくなります。
+必ずテスト用デバイスで、対象 PCI アドレスが正しいことを確認してから実行してください。
+
+### genpci ドライバーのインストール
+
+`newperf` は BAR0 と DMA メモリを直接扱うため、付属の `genpci` ドライバーを使用します。
+`engines/myplugin` ディレクトリから次を実行して、カーネルモジュールをビルドしてロードしてください。
+
+```bash
+cd /home/ttt/fio/engines/myplugin/tools/lib/driver
+make
+sudo insmod driver.ko
+```
+
+モジュール名は `driver.ko` ですが、PCI ドライバー名と作成されるデバイス名は `genpci` です。
+ロード後に `/dev/genpci0` のようなデバイスが作成されていることを確認してください。
+
+```bash
+ls -l /dev/genpci*
+readlink /sys/bus/pci/devices/0000:05:00.0/driver
+```
+
+`/dev/genpci*` が作成されない場合は、対象デバイスを `genpci` に手動で bind してください。
+
+```bash
+echo 0000:05:00.0 | sudo tee /sys/bus/pci/drivers/genpci/bind
+```
+
+テストが終わったら、必要に応じてモジュールを unload します。
+
+```bash
+sudo rmmod driver
+```
+
+## ビルド
+
+`engines/myplugin` ディレクトリからビルドします。
+
+```bash
+cd /home/ttt/fio/engines/myplugin
 make
 ```
 
-This builds:
+これにより次のファイルがビルドされます。
 
 ```text
 newperf.o
@@ -36,10 +98,10 @@ tools/test/test1
 tools/test/test2
 ```
 
-`newperf.o` is built as a shared external fio ioengine using:
+`newperf.o` は、次のコマンドにより共有外部 fio ioengine としてビルドされます。
 
 ```bash
-gcc -Wall -O2 -g -D_GNU_SOURCE -include ../config-host.h \
+gcc -Wall -O2 -g -D_GNU_SOURCE -include ../../config-host.h \
   -shared -rdynamic -fPIC \
   -Itools -Itools/lib -Itools/lib/driver/api -Itools/lib/driver \
   -o newperf.o \
@@ -51,39 +113,39 @@ gcc -Wall -O2 -g -D_GNU_SOURCE -include ../config-host.h \
   tools/lib/driver/api/dma.c
 ```
 
-Clean build files:
+ビルド生成物を削除して再ビルドするには、次を実行します。
 
 ```bash
 make clean
 make
 ```
 
-## Target Format
+## ターゲット形式
 
-Use the fio `filename` option to specify the NVMe target.
+fio の `filename` オプションで NVMe ターゲットを指定します。
 
 ```text
 <bus>:<device>.<function>,<namespace-id>
 ```
 
-Example:
+例:
 
 ```text
 05:00.0,1
 ```
 
-fio treats `:` as a filename separator, so escape it:
+fio は `:` をファイル名の区切り文字として扱うため、エスケープしてください。
 
 ```bash
 --filename='05\:00.0,1'
 ```
 
-## Basic Read Test
+## 基本的な Read テスト
 
-Run from the `engines` directory:
+`engines/myplugin` ディレクトリから実行します。
 
 ```bash
-sudo ../fio \
+sudo ../../fio \
   --name=newperf-read \
   --ioengine=./newperf.o \
   --filename='05\:00.0,1' \
@@ -97,14 +159,14 @@ sudo ../fio \
   --runtime=10
 ```
 
-`--thread=1` is required. The engine uses shared controller state in-process and creates one SQ/CQ pair per fio thread.
+`--thread=1` は必須です。このエンジンはプロセス内で共有コントローラー状態を使用し、fio スレッドごとに 1 つの SQ/CQ ペアを作成します。
 
-## Write Test
+## Write テスト
 
-Danger: this overwrites data.
+危険: これはデータを上書きします。
 
 ```bash
-sudo ../fio \
+sudo ../../fio \
   --name=newperf-write \
   --ioengine=./newperf.o \
   --filename='05\:00.0,1' \
@@ -118,12 +180,12 @@ sudo ../fio \
   --runtime=10
 ```
 
-## Trim Test
+## Trim テスト
 
-Danger: this deallocates LBAs.
+危険: これは LBA を解放します。
 
 ```bash
-sudo ../fio \
+sudo ../../fio \
   --name=newperf-trim \
   --ioengine=./newperf.o \
   --filename='05\:00.0,1' \
@@ -137,10 +199,10 @@ sudo ../fio \
   --runtime=10
 ```
 
-Multi-range trim is supported when the fio version supports `FIO_MULTI_RANGE_TRIM`.
+使用している fio バージョンが `FIO_MULTI_RANGE_TRIM` をサポートしている場合、マルチレンジ trim を使用できます。
 
 ```bash
-sudo ../fio \
+sudo ../../fio \
   --name=newperf-multi-trim \
   --ioengine=./newperf.o \
   --filename='05\:00.0,1' \
@@ -155,12 +217,12 @@ sudo ../fio \
   --runtime=10
 ```
 
-## Multiple Jobs
+## 複数ジョブ
 
-Use fio threads, not processes.
+プロセスではなく fio スレッドを使用してください。
 
 ```bash
-sudo ../fio \
+sudo ../../fio \
   --name=newperf-read \
   --ioengine=./newperf.o \
   --filename='05\:00.0,1' \
@@ -175,28 +237,28 @@ sudo ../fio \
   --runtime=10
 ```
 
-The design is:
+設計は次のとおりです。
 
 ```text
-1 controller shared by all fio threads
-1 I/O SQ per fio thread
-1 I/O CQ per fio thread
+すべての fio スレッドで 1 つのコントローラーを共有
+fio スレッドごとに 1 つの I/O SQ
+fio スレッドごとに 1 つの I/O CQ
 ```
 
-Queue IDs are assigned per fio thread.
+キュー ID は fio スレッドごとに割り当てられます。
 
-## Current Limitations
+## 現在の制限事項
 
-- `--thread=1` is required.
-- `nr_files > 1` is rejected.
-- All jobs are expected to use the same target.
-- The I/O queue depth is configured as `iodepth + 1`.
-- I/O offset and size must be aligned to the namespace LBA size.
-- This engine assumes fio-provided I/O buffers are allocated through the engine DMA allocator.
+- `--thread=1` が必須です。
+- `nr_files > 1` は拒否されます。
+- すべてのジョブが同じターゲットを使用することを前提としています。
+- I/O キュー深度は `iodepth + 1` として設定されます。
+- I/O オフセットとサイズは、名前空間の LBA サイズにアラインしている必要があります。
+- このエンジンは、fio から提供される I/O バッファーがエンジンの DMA アロケーターを通じて割り当てられていることを前提としています。
 
-## Callback Flow
+## コールバックの流れ
 
-The engine follows this fio callback order:
+このエンジンは、次の fio コールバック順序に従います。
 
 ```text
 setup
@@ -206,20 +268,20 @@ queue / getevents / event
 cleanup
 ```
 
-`setup` initializes the shared controller.
-`get_file_size` reads the namespace size and marks the fio file size as known.
-`init` allocates per-thread queue state and creates one SQ/CQ pair.
+`setup` は共有コントローラーを初期化します。
+`get_file_size` は名前空間サイズを読み取り、fio ファイルサイズを既知としてマークします。
+`init` はスレッドごとのキュー状態を割り当て、1 つの SQ/CQ ペアを作成します。
 
-## Troubleshooting
+## トラブルシューティング
 
-If fio says multiple files are not supported, check the escaped colon:
+fio が複数ファイルはサポートされていないと表示する場合は、コロンがエスケープされているか確認してください。
 
 ```bash
 --filename='05\:00.0,1'
 ```
 
-If fio reports a symbol lookup error, rebuild `newperf.o` with `make` from the `engines` directory.
+fio がシンボル検索エラーを報告する場合は、`engines/myplugin` ディレクトリから `make` を実行して `newperf.o` を再ビルドしてください。
 
-If DMA allocation fails, reduce `iodepth` or fio buffer size.
+DMA 割り当てに失敗する場合は、`iodepth` または fio のバッファーサイズを小さくしてください。
 
-If the controller does not become ready, confirm that the target PCI address is correct and that no other driver is controlling the device.
+コントローラーが ready 状態にならない場合は、ターゲットの PCI アドレスが正しいこと、および他のドライバーがそのデバイスを制御していないことを確認してください。

@@ -5,7 +5,7 @@ NEWPERF := newperf.o
 
 NEWPERF_CPPFLAGS := \
 	-D_GNU_SOURCE \
-	-include ../config-host.h \
+	-include ../../config-host.h \
 	-Itools \
 	-Itools/lib \
 	-Itools/lib/driver/api \
