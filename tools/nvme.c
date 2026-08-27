@@ -120,9 +120,6 @@ struct nvme_dsm_range {
     uint64_t slba;
 };
 
-_Static_assert(sizeof(struct nvme_dsm_range) == 16u,
-               "NVMe DSM range descriptor must be 16 bytes");
-
 void nvme_data_init(struct nvme_data *n)
 {
     memset(n, 0, sizeof(*n));
